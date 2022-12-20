@@ -1,4 +1,4 @@
-package tinkoff
+package tinkoff // Package tinkoff: unused
 
 import "time"
 
