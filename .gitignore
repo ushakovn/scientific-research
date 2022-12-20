@@ -2,3 +2,4 @@
 *.db
 *.sql
 *.sqllite
+/internal/storage/db/*.sqlite
