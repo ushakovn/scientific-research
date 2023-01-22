@@ -12,15 +12,6 @@ import (
   "golang.org/x/sync/errgroup"
 )
 
-const (
-  paginationInc    = 10
-  concurrencyLimit = 100
-
-  respStatusOk  = "Ok"
-  respStockType = "Stock"
-  stocksAPI     = "https://www.tinkoff.ru/api/trading/stocks/list"
-)
-
 type Fetcher struct {
   ctx        context.Context
   client     *httpclient.Client
