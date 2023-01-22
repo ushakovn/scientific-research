@@ -1,14 +1,15 @@
 package tinkoff // Package tinkoff: unused
 
 import (
+  "context"
   "encoding/json"
   "fmt"
-  "golang.org/x/sync/errgroup"
   "log"
-  "context"
   "scientific-research/internal/httpclient"
   "sync/atomic"
   "time"
+
+  "golang.org/x/sync/errgroup"
 )
 
 const (

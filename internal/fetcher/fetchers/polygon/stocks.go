@@ -2,16 +2,17 @@ package polygon
 
 import (
   "context"
-  "scientific-research/internal/httpclient"
-  "os"
+  "encoding/json"
   "fmt"
   "net/url"
-  "encoding/json"
-  log "github.com/sirupsen/logrus"
-  "time"
+  "os"
   "scientific-research/internal/domain"
+  "scientific-research/internal/httpclient"
   "scientific-research/internal/storage"
   "sync"
+  "time"
+
+  log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -147,7 +148,7 @@ func (f *Fetcher) fetchTickers(fetchStock func(*domain.Ticker) error) error {
   return nil
 }
 
-func createTicker(resp *tickersResp) *domain.Ticker {
+func createTicker(resp *tickerResult) *domain.Ticker {
   return &domain.Ticker{
     Ticker:    resp.Ticker,
     Name:      resp.Name,
@@ -213,7 +214,7 @@ func (f *Fetcher) fetchStocks(ticker *domain.Ticker) error {
   return nil
 }
 
-func createStock(ticker *domain.Ticker, resp *pricesResp) *domain.Stock {
+func createStock(ticker *domain.Ticker, resp *pricesResult) *domain.Stock {
   return &domain.Stock{
     Ticker:    ticker.Ticker,
     Open:      resp.Open,

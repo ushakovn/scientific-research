@@ -1,9 +1,9 @@
 package utils
 
 import (
+  "bytes"
   "encoding/csv"
   "fmt"
-  "bytes"
   "reflect"
 )
 

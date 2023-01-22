@@ -1,10 +1,11 @@
 package tinkoff // Package tinkoff: unused
 
 import (
-  "time"
-  "sync/atomic"
-  log "github.com/sirupsen/logrus"
   "scientific-research/internal/domain"
+  "sync/atomic"
+  "time"
+
+  log "github.com/sirupsen/logrus"
 )
 
 const (

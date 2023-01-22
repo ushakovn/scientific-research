@@ -2,8 +2,8 @@ package utils
 
 import (
   "encoding/json"
-  "reflect"
   "fmt"
+  "reflect"
 )
 
 const mandatoryTag = "mandatory"

@@ -4,10 +4,11 @@ import (
   "context"
   "os"
   "os/signal"
-  "syscall"
   "scientific-research/internal/fetcher/fetchers/polygon"
-  log "github.com/sirupsen/logrus"
   "scientific-research/internal/handler"
+  "syscall"
+
+  log "github.com/sirupsen/logrus"
 )
 
 func main() {
@@ -22,19 +23,19 @@ func main() {
   h := handler.NewHandler(f)
   h.SetHandles()
 
-  port := getPort()
+  port := GetPort()
   go h.ContinuouslyServe(port)
 
-  hold()
+  GracefulShutdown()
 }
 
-func hold() {
+func GracefulShutdown() {
   exitSignal := make(chan os.Signal)
   signal.Notify(exitSignal, syscall.SIGINT, syscall.SIGTERM)
   <-exitSignal
 }
 
-func getPort() string {
+func GetPort() string {
   port := os.Getenv("PORT")
   if port == "" {
     return "8080"

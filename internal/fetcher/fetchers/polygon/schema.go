@@ -2,7 +2,7 @@ package polygon
 
 import "time"
 
-type tickersResp struct {
+type tickerResult struct {
   Ticker         string    `json:"ticker"`
   Name           string    `json:"name"`
   Market         string    `json:"market"`
@@ -14,13 +14,13 @@ type tickersResp struct {
 }
 
 type tickersResponse struct {
-  Results []*tickersResp `json:"results"`
-  Status  string         `json:"status"`
-  Count   int            `json:"count"`
-  NextUrl string         `json:"next_url"`
+  Results []*tickerResult `json:"results"`
+  Status  string          `json:"status"`
+  Count   int             `json:"count"`
+  NextUrl string          `json:"next_url"`
 }
 
-type pricesResp struct {
+type pricesResult struct {
   Open      float64 `json:"o"`
   Close     float64 `json:"c"`
   Highest   float64 `json:"h"`
@@ -30,11 +30,11 @@ type pricesResp struct {
 }
 
 type pricesResponse struct {
-  Adjusted     bool          `json:"adjusted"`
-  QueryCount   int           `json:"queryCount"`
-  RequestId    string        `json:"request_id"`
-  StockResults []*pricesResp `json:"results"`
-  ResultsCount int           `json:"resultsCount"`
-  Status       string        `json:"status"`
-  Ticker       string        `json:"ticker"`
+  Adjusted     bool            `json:"adjusted"`
+  QueryCount   int             `json:"queryCount"`
+  RequestId    string          `json:"request_id"`
+  StockResults []*pricesResult `json:"results"`
+  ResultsCount int             `json:"resultsCount"`
+  Status       string          `json:"status"`
+  Ticker       string          `json:"ticker"`
 }
