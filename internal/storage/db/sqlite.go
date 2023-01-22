@@ -1,12 +1,13 @@
 package db
 
 import (
-  _ "github.com/mattn/go-sqlite3"
   "database/sql"
-  "scientific-research/pkg/utils"
   "fmt"
-  log "github.com/sirupsen/logrus"
   "os"
+  "scientific-research/pkg/utils/retries"
+
+  _ "github.com/mattn/go-sqlite3"
+  log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -38,10 +39,11 @@ func (c *Client) Open() error {
   }
   connStr := fmt.Sprint(ds, "?cache=shared")
 
-  if err = utils.DoWithRetry(func() error {
+  err = retries.DoWithRetry(func() error {
     db, err = sql.Open(driverName, connStr)
     return err
-  }); err != nil {
+  })
+  if err != nil {
     return fmt.Errorf("cannot open connection to db: %v", err)
   }
   c.db = db
@@ -50,7 +52,7 @@ func (c *Client) Open() error {
 }
 
 func (c *Client) Close() error {
-  err := utils.DoWithRetry(func() error {
+  err := retries.DoWithRetry(func() error {
     return c.db.Close()
   })
   if err != nil {

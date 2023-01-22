@@ -1,45 +1,59 @@
 package polygon
 
 import (
+  "fmt"
+  "os"
   "scientific-research/internal/domain"
+  "strconv"
   "sync/atomic"
   "time"
 
   log "github.com/sirupsen/logrus"
 )
 
-const (
-  retryCount = 5
-
-  recentlyFetchedSleepInterval  = 1 * time.Hour
-  encounteredErrorSleepInterval = 10 * time.Minute
-
-  modeTotal   = 0
-  modeCurrent = 1
-)
-
 type state struct {
-  lastUpd   time.Time
-  lastCount atomic.Uint32
-  lastMode  int
+  lastUpd          time.Time
+  lastCount        atomic.Uint32
+  lastModeCode     int
+  modeTotalHours   int
+  modeCurrentHours int
 }
 
-func (f *Fetcher) setMode(mode int) {
-  if mode != modeTotal && mode != modeCurrent {
-    log.Warnf("invalid mode code: %d. mode do not changed", mode)
+func initState() (*state, error) {
+  modeTotalHours, err := strconv.Atoi(os.Getenv(modeTotalHoursEnv))
+  if err != nil {
+    return nil, fmt.Errorf("cannot convert hours for total mode: %v", err)
+  }
+
+  modeCurrentHours, err := strconv.Atoi(os.Getenv(modeCurrentHoursEnv))
+  if err != nil {
+    return nil, fmt.Errorf("cannot convert hours for current mode: %v", err)
+  }
+
+  return &state{
+    lastModeCode:     fetcherModeTotal,
+    modeTotalHours:   modeTotalHours,
+    modeCurrentHours: modeCurrentHours,
+  }, nil
+}
+
+func (f *Fetcher) setModeCode(mode int) {
+  if mode != fetcherModeTotal && mode != fetcherModeCurrent {
+    log.Warnf("invalid fetcher mode code: %d. mode do not changed", mode)
     return
   }
-  f.state.lastMode = mode
+  f.state.lastModeCode = mode
   log.Printf("set fetcher mode: %d. possible: %d - total, %d - current",
-    mode, modeTotal, modeCurrent)
+    mode, fetcherModeTotal, fetcherModeCurrent)
 }
 
-func (f *Fetcher) SetTicker(ticker string) {
-  if ticker == "" {
+func (f *Fetcher) SetTicker(tickerName string) {
+  if tickerName == "" {
     log.Warnf("empty ticker name. ticker do not set")
+    return
   }
   f.ticker = &domain.Ticker{
-    Ticker: ticker,
+    Ticker: tickerName,
   }
 }
 
@@ -50,12 +64,12 @@ func (f *Fetcher) countInc(count int) {
 }
 
 func (f *Fetcher) countReset() {
-  f.state.lastCount.Swap(0)
+  f.state.lastCount.Store(0)
   f.state.lastUpd = time.Now()
 }
 
 func (f *Fetcher) hasRelevantState() bool {
-  thresholdTime := f.state.lastUpd.Add(24 * time.Hour)
+  thresholdTime := f.state.lastUpd.Add(relevantThresholdInterval)
   return f.state.lastCount.Load() != 0 && thresholdTime.After(time.Now())
 }
 
@@ -64,28 +78,31 @@ func (f *Fetcher) hasSpeciallyTicker() bool {
 }
 
 func (f *Fetcher) ContinuouslyFetch() {
-  var err error
+  f.setModeCode(fetcherModeTotal)
 
-  f.setMode(modeTotal)
-  tryLeft := retryCount
+  tryLeft := fetcherRetryCount
 
   for tryLeft >= 0 {
     if f.hasRelevantState() {
 
-      log.Printf("recently fetched. wait %v before the next launch",
+      log.Printf("recently fetched. wait %v before the next fetch",
         recentlyFetchedSleepInterval)
 
       time.Sleep(recentlyFetchedSleepInterval)
       continue
     }
 
+    var err error
+
     if f.hasSpeciallyTicker() {
       err = f.fetchStocks(f.ticker)
+
     } else {
       err = f.fetchTickers(f.fetchStocks)
     }
+
     if err != nil {
-      log.Errorf("fetching error: %v. wait %v before the next launch",
+      log.Errorf("fetching error: %v. wait %v before the next fetch",
         err, encounteredErrorSleepInterval)
 
       time.Sleep(encounteredErrorSleepInterval)
@@ -100,12 +117,13 @@ func (f *Fetcher) ContinuouslyFetch() {
     }
 
     f.once.Do(func() {
-      f.setMode(modeCurrent)
+      f.setModeCode(fetcherModeCurrent)
     })
   }
+
   log.Fatalf("fetching failed and stopped")
 }
 
 func (f *Fetcher) QueryFetchedStocks(ticker string) ([]*domain.Stock, error) {
-  return f.stocksCache.QueryStocks(ticker)
+  return f.storage.QueryStocks(ticker)
 }

@@ -18,6 +18,7 @@ func main() {
   if err != nil {
     log.Fatal(err)
   }
+
   go f.ContinuouslyFetch()
 
   h := handler.NewHandler(f)

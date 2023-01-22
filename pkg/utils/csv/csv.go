@@ -1,4 +1,4 @@
-package utils
+package csv
 
 import (
   "bytes"
@@ -7,17 +7,17 @@ import (
   "reflect"
 )
 
-func CreateCSV(d []any) ([]byte, error) {
+func ToCsvBytes[T any](s []T) ([]byte, error) {
   var (
     res       []string
     hasHeader bool
   )
   b := &bytes.Buffer{}
 
-  for _, dI := range d {
+  for _, item := range s {
     wr := csv.NewWriter(b)
 
-    val := reflect.ValueOf(dI).Elem()
+    val := reflect.ValueOf(item).Elem()
 
     if !hasHeader {
       for i := 0; i < val.NumField(); i++ {
@@ -36,6 +36,7 @@ func CreateCSV(d []any) ([]byte, error) {
 
     for i := 0; i < val.NumField(); i++ {
       valField := val.Field(i).Interface()
+
       res = append(res, fmt.Sprintf("%v", valField))
     }
     if err := wr.Write(res); err != nil {

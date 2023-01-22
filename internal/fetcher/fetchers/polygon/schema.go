@@ -20,7 +20,7 @@ type tickersResponse struct {
   NextUrl string          `json:"next_url"`
 }
 
-type pricesResult struct {
+type stockResult struct {
   Open      float64 `json:"o"`
   Close     float64 `json:"c"`
   Highest   float64 `json:"h"`
@@ -29,12 +29,12 @@ type pricesResult struct {
   Volume    float64 `json:"v"`
 }
 
-type pricesResponse struct {
-  Adjusted     bool            `json:"adjusted"`
-  QueryCount   int             `json:"queryCount"`
-  RequestId    string          `json:"request_id"`
-  StockResults []*pricesResult `json:"results"`
-  ResultsCount int             `json:"resultsCount"`
-  Status       string          `json:"status"`
-  Ticker       string          `json:"ticker"`
+type stocksResponse struct {
+  Adjusted     bool           `json:"adjusted"`
+  QueryCount   int            `json:"queryCount"`
+  RequestId    string         `json:"request_id"`
+  StockResults []*stockResult `json:"results"`
+  ResultsCount int            `json:"resultsCount"`
+  Status       string         `json:"status"`
+  Ticker       string         `json:"ticker"`
 }

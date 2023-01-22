@@ -7,6 +7,7 @@ import (
   "net/url"
   "os"
   "scientific-research/internal/domain"
+  "scientific-research/internal/fetcher"
   "scientific-research/internal/httpclient"
   "scientific-research/internal/storage"
   "sync"
@@ -16,86 +17,101 @@ import (
 )
 
 type Fetcher struct {
-  ctx          context.Context
-  client       *httpclient.Client
-  stocksCache  *storage.CacheStorage
-  tickersCache *storage.CacheStorage
-  token        string
-  state        *state
-  once         *sync.Once
-  ticker       *domain.Ticker
+  ctx     context.Context
+  client  *httpclient.Client
+  storage storage.Storage
+  token   string
+  state   *state
+  once    *sync.Once
+  ticker  *domain.Ticker
 }
 
-func NewFetcher(ctx context.Context) (*Fetcher, error) {
-  token, err := getAPIKey()
+func NewFetcher(ctx context.Context) (fetcher.Fetcher, error) {
+  token, err := getAccessToken()
   if err != nil {
     return nil, err
   }
-  client := httpclient.NewClient(ctx, httpclient.WithLimiter(clientLimit))
+
+  state, err := initState()
+  if err != nil {
+    return nil, err
+  }
+
+  client := httpclient.NewClient(
+    httpclient.WithContext(ctx),
+    httpclient.WithRequestsLimit(
+      polygonReqsLimit,
+      polygonReqPerDur,
+      polygonWaitDur,
+      polygonDeadlineDur,
+    ),
+  )
 
   fetcherStorage, err := storage.NewStorage()
   if err != nil {
     return nil, err
   }
-  stocksCache, err := storage.NewCache(fetcherStorage, stocksCacheDesc)
-  if err != nil {
-    return nil, err
-  }
-  tickersCache, err := storage.NewCache(fetcherStorage, tickersCacheDesc)
-  if err != nil {
-    return nil, err
-  }
 
   return &Fetcher{
-    ctx:          ctx,
-    client:       client,
-    stocksCache:  stocksCache,
-    tickersCache: tickersCache,
-    token:        token,
-    state:        &state{},
-    once:         &sync.Once{},
+    ctx:     ctx,
+    client:  client,
+    storage: fetcherStorage,
+    token:   token,
+    state:   state,
+    once:    &sync.Once{},
   }, nil
 }
 
-func getAPIKey() (string, error) {
-  token := os.Getenv(polygonAPIKey)
+func getAccessToken() (string, error) {
+  token := os.Getenv(polygonTokenEnvName)
   if token == "" {
-    return "", fmt.Errorf("empty token recieved")
+    return "", fmt.Errorf("invalid empty token recieved")
   }
   return token, nil
 }
 
 func (f *Fetcher) getTickersResponse(query string) (*tickersResponse, error) {
-  reqUrl := fmt.Sprint(basePrefixAPI, tickersAPI, "?", query)
-  resp, err := f.client.Get(reqUrl)
+  reqURL := fmt.Sprint(basePrefixAPI, tickersAPI, "?", query)
+
+  resp, err := f.client.Get(reqURL)
   if err != nil {
     return nil, fmt.Errorf("cannot get response: %v", err)
   }
+
   tickersResp := &tickersResponse{}
   if err = json.Unmarshal(resp, tickersResp); err != nil {
     return nil, fmt.Errorf("cannot parse json response: %v", err)
   }
+
   return tickersResp, nil
 }
 
-func (f *Fetcher) fetchTickers(fetchStock func(*domain.Ticker) error) error {
+func buildTickersQuery(tokenValue string) url.Values {
   query := url.Values{}
-  query.Add("apiKey", f.token)
+  query.Add("apiKey", tokenValue)
   query.Add("active", "true")
   query.Add("order", "asc")
+
+  return query
+}
+
+func (f *Fetcher) fetchTickers(fetchStocks func(ticker *domain.Ticker) error) error {
+  query := buildTickersQuery(f.token)
 
   for {
     tickersResp, err := f.getTickersResponse(query.Encode())
     if err != nil {
       return err
     }
+
     respStatus := tickersResp.Status
-    cursorUrl := tickersResp.NextUrl
+    cursorURL := tickersResp.NextUrl
 
     if respStatus != respStatusOK {
       return fmt.Errorf("bad response status: %s", respStatus)
     }
-    if tickersResp.Count == 0 || cursorUrl == "" {
+
+    if tickersResp.Count == 0 || cursorURL == "" {
       break
     }
 
@@ -105,27 +121,26 @@ func (f *Fetcher) fetchTickers(fetchStock func(*domain.Ticker) error) error {
       }
       ticker := createTicker(tickerResp)
 
-      if err := f.tickersCache.Put(ticker); err != nil {
-        log.Errorf("cannot put tocker in storage: %v", err)
+      if err = f.storage.PutTicker(ticker); err != nil {
+        return fmt.Errorf("cannot put ticker in database: %v", err)
       }
 
-      if err = fetchStock(ticker); err != nil {
-        log.Warnf("cannot fetch stock: %v", err)
-        continue
+      if err = fetchStocks(ticker); err != nil {
+        return fmt.Errorf("cannot fetch stocks for ticker %s: %v", ticker.Ticker, err)
       }
     }
 
-    cursor, err := url.Parse(cursorUrl)
+    cursor, err := url.Parse(cursorURL)
     if err != nil {
-      return fmt.Errorf("cannot parse cursor url: %s", cursorUrl)
+      return fmt.Errorf("cannot parse cursor URL: %s", cursorURL)
     }
 
-    cursorValue := cursor.Query().Get(cursorKey)
+    cursorValue := cursor.Query().Get(respCursorKey)
     if cursorValue == "" {
       break
     }
 
-    query.Add(cursorKey, cursorValue)
+    query.Add(respCursorKey, cursorValue)
   }
   return nil
 }
@@ -147,10 +162,12 @@ func (f *Fetcher) getStockDateRange() (string, string) {
   fromT := nowT
   toT := nowT
 
-  sub := hoursPerDay
-  if f.state.lastMode == modeTotal {
-    sub = hoursPerYear
+  sub := f.state.modeCurrentHours
+
+  if f.state.lastModeCode == fetcherModeTotal {
+    sub = f.state.modeTotalHours
   }
+
   dur := time.Duration(sub) * time.Hour
 
   from := fromT.Add(-dur).Format("2006-01-02")
@@ -159,51 +176,59 @@ func (f *Fetcher) getStockDateRange() (string, string) {
   return from, to
 }
 
-func (f *Fetcher) fetchStocks(ticker *domain.Ticker) error {
-  stocksTicker := ticker.Ticker
+func buildStocksReqURL(tickerName, fromDate, toDate, tokenValue string) string {
   multiplier := 1
   timespan := "day"
-  from, to := f.getStockDateRange()
 
-  rangeQuery := fmt.Sprintf(pricesAPI, stocksTicker, multiplier, timespan, from, to)
+  rangeQuery := fmt.Sprintf(stocksAPI, tickerName, multiplier, timespan, fromDate, toDate)
 
   query := url.Values{}
-  query.Add("apiKey", f.token)
+  query.Add("apiKey", tokenValue)
 
-  reqUrl := fmt.Sprint(basePrefixAPI, rangeQuery, "?", query.Encode())
+  reqURL := fmt.Sprint(basePrefixAPI, rangeQuery, "?", query.Encode())
 
-  resp, err := f.client.Get(reqUrl)
+  return reqURL
+}
+
+func (f *Fetcher) fetchStocks(ticker *domain.Ticker) error {
+  fromDate, toDate := f.getStockDateRange()
+
+  reqURL := buildStocksReqURL(ticker.Ticker, fromDate, toDate, f.token)
+
+  resp, err := f.client.Get(reqURL)
   if err != nil {
     return fmt.Errorf("cannot get response")
   }
 
-  pricesResp := &pricesResponse{}
-  if err := json.Unmarshal(resp, pricesResp); err != nil {
+  stockResp := &stocksResponse{}
+  if err := json.Unmarshal(resp, stockResp); err != nil {
     return fmt.Errorf("cannot parse json reponse: %v", err)
   }
 
-  if pricesResp.QueryCount == 0 {
-    return fmt.Errorf("stock prices not found: %v", err)
+  if stockResp.QueryCount == 0 {
+    log.Warnf("stock prices not found for ticker: %s", ticker.Ticker)
+    return nil
   }
 
-  for _, stockPrice := range pricesResp.StockResults {
-    stock := createStock(ticker, stockPrice)
+  for _, stockRes := range stockResp.StockResults {
+    stock := createStock(ticker, stockRes)
 
-    if err := f.stocksCache.Put(stock); err != nil {
-      return fmt.Errorf("cannot put stock in storage: %v", err)
+    if err = f.storage.PutStock(stock); err != nil {
+      return fmt.Errorf("cannot put stock in database: %v", err)
     }
   }
+
   return nil
 }
 
-func createStock(ticker *domain.Ticker, resp *pricesResult) *domain.Stock {
+func createStock(ticker *domain.Ticker, res *stockResult) *domain.Stock {
   return &domain.Stock{
     Ticker:    ticker.Ticker,
-    Open:      resp.Open,
-    Close:     resp.Close,
-    Highest:   resp.Highest,
-    Lowest:    resp.Lowest,
-    Timestamp: resp.Timestamp,
-    Volume:    resp.Volume,
+    Open:      res.Open,
+    Close:     res.Close,
+    Highest:   res.Highest,
+    Lowest:    res.Lowest,
+    Timestamp: res.Timestamp,
+    Volume:    res.Volume,
   }
 }
