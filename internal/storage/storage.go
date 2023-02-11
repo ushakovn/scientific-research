@@ -2,32 +2,31 @@ package storage
 
 import (
   "fmt"
-  "regexp"
   "scientific-research/internal/domain"
   "scientific-research/internal/storage/db"
-  "strings"
+
+  sq "github.com/Masterminds/squirrel"
 
   log "github.com/sirupsen/logrus"
 )
-
-var regSep = regexp.MustCompile(`[\n\r\t]`)
 
 const batchSize = 25
 
 type Storage interface {
   PutTicker(ticker *domain.Ticker) error
   PutStock(stock *domain.Stock) error
-  QueryStocks(tickerName string) ([]*domain.Stock, error)
+  QueryStocks(ticker string) ([]*domain.Stock, error)
+  CloseConn() error
 }
 
 type storage struct {
-  dbClient     *db.Client
+  dbClient     db.Client
   tickersCache *Cache[*domain.Ticker]
   stocksCache  *Cache[*domain.Stock]
 }
 
 func NewStorage() (Storage, error) {
-  client := &db.Client{}
+  client := db.NewSqliteClient()
 
   err := client.Open()
   if err != nil {
@@ -41,8 +40,8 @@ func NewStorage() (Storage, error) {
   }, nil
 }
 
-func sanitizeQuery(query string) string {
-  return regSep.ReplaceAllString(query, "")
+func (s *storage) CloseConn() error {
+  return s.dbClient.Close()
 }
 
 func (s *storage) PutTicker(ticker *domain.Ticker) error {
@@ -100,41 +99,29 @@ func (s *storage) PutBatchTickers(tickers []*domain.Ticker) error {
     return fmt.Errorf("tickers batch is empty")
   }
 
-  query := sanitizeQuery(`INSERT OR IGNORE INTO ticker (
-    ticker_id,
-    locale,
-    currency,
-    active,
-    updated_at
-  ) VALUES %s`)
-
-  valueStr := `(?, ?, ?, ?, ?)`
-
-  var (
-    valueStrings []string
-    valueArgs    []any
-    err          error
-  )
+  columns := []string{
+    `ticker_id`,
+    `locale`,
+    `currency`,
+    `active`,
+    `updated_at`,
+  }
+  builder := sq.Insert(``).
+    Options(`OR IGNORE`).
+    Into(`ticker`).
+    Columns(columns...)
 
   for _, ticker := range tickers {
-    valueStrings = append(valueStrings, valueStr)
-    currentArgs := []any{
+    values := []any{
       ticker.Ticker,
       ticker.Locale,
       ticker.Currency,
       fmt.Sprintf("%t", ticker.Active),
       ticker.UpdatedAt.Format("2006-01-02"),
     }
-    valueArgs = append(valueArgs, currentArgs...)
+    builder = builder.Values(values...)
   }
-  query = fmt.Sprintf(query, strings.Join(valueStrings, ","))
-
-  err = s.dbClient.Exec(query, valueArgs...)
-  if err != nil {
-    return fmt.Errorf("cannot put tickers to storage: %v", err)
-  }
-
-  return nil
+  return s.execInsertQuery(builder)
 }
 
 func (s *storage) PutBatchStocks(stocks []*domain.Stock) error {
@@ -142,29 +129,25 @@ func (s *storage) PutBatchStocks(stocks []*domain.Stock) error {
     return fmt.Errorf("stocks batch is empty")
   }
 
-  query := sanitizeQuery(`INSERT OR IGNORE INTO stock (
-      stock_id, 
-      ticker_name, 
-      open_price,
-      close_price,
-      highest_price,
-      lowest_price,
-      timestamp__,
-      volume
-    ) VALUES %s`)
-
-  valueStr := `(?, ?, ?, ?, ?, ?, ?, ?)`
-
-  var (
-    valueStrings []string
-    valueArgs    []any
-    err          error
-  )
+  columns := []string{
+    `stock_id`,
+    `ticker_name`,
+    `open_price`,
+    `close_price`,
+    `highest_price`,
+    `lowest_price`,
+    `timestamp__`,
+    `volume`,
+  }
+  builder := sq.Insert(``).
+    Options(`OR IGNORE`).
+    Into(`stock`).
+    Columns(columns...)
 
   for _, stock := range stocks {
-    valueStrings = append(valueStrings, valueStr)
     stockId := fmt.Sprint(stock.Ticker, "_", stock.Timestamp)
-    currentArgs := []any{
+
+    values := []any{
       stockId,
       stock.Ticker,
       stock.Open,
@@ -174,37 +157,34 @@ func (s *storage) PutBatchStocks(stocks []*domain.Stock) error {
       stock.Timestamp,
       stock.Volume,
     }
-    valueArgs = append(valueArgs, currentArgs...)
+    builder = builder.Values(values...)
   }
-  query = fmt.Sprintf(query, strings.Join(valueStrings, ","))
-
-  err = s.dbClient.Exec(query, valueArgs...)
-  if err != nil {
-    return fmt.Errorf("cannot put stocks to storage: %v", err)
-  }
-
-  return nil
+  return s.execInsertQuery(builder)
 }
 
 func (s *storage) QueryStocks(tickerName string) ([]*domain.Stock, error) {
-
-  query := sanitizeQuery(`SELECT 
-    ticker_name AS tickerName,
-    open_price AS open,
-    close_price AS close,
-    highest_price AS highest,
-    lowest_price AS lowest,
-    timestamp__ AS timestamp,
-    volume 
-  FROM stock %s`)
-
-  var filter string
-  if tickerName != "" {
-    filter = fmt.Sprintf("WHERE ticker_name = '%s'", tickerName)
+  columns := []string{
+    `ticker_name AS tickerName`,
+    `open_price AS open`,
+    `close_price AS close`,
+    `highest_price AS highest`,
+    `lowest_price AS lowest`,
+    `timestamp__ AS timestamp`,
+    `volume`,
   }
-  query = fmt.Sprintf(query, filter)
+  builder := sq.Select(columns...).From(`stock`)
 
-  res, err := s.dbClient.Query(query)
+  if tickerName != "" {
+    builder = builder.Where(sq.Eq{
+      `ticker_name`: tickerName,
+    })
+  }
+
+  query, args, err := builder.PlaceholderFormat(sq.Question).ToSql()
+  if err != nil {
+    return nil, fmt.Errorf("cannot form select query: %v", err)
+  }
+  res, err := s.dbClient.Query(query, args...)
   if err != nil {
     return nil, fmt.Errorf("query error: %v", err)
   }
@@ -212,7 +192,6 @@ func (s *storage) QueryStocks(tickerName string) ([]*domain.Stock, error) {
 
   for res.Next() {
     stock := &domain.Stock{}
-
     if err := res.Scan(
       &stock.Ticker,
       &stock.Open,
@@ -220,11 +199,24 @@ func (s *storage) QueryStocks(tickerName string) ([]*domain.Stock, error) {
       &stock.Highest,
       &stock.Lowest,
       &stock.Timestamp,
-      &stock.Volume); err != nil {
+      &stock.Volume,
+    ); err != nil {
       return nil, fmt.Errorf("cannot scan row result: %v", err)
     }
 
     stocks = append(stocks, stock)
   }
   return stocks, nil
+}
+
+func (s *storage) execInsertQuery(builder sq.InsertBuilder) error {
+  query, args, err := builder.PlaceholderFormat(sq.Question).ToSql()
+  if err != nil {
+    return fmt.Errorf("cannot form insert query: %v", err)
+  }
+  err = s.dbClient.Exec(query, args...)
+  if err != nil {
+    return fmt.Errorf("cannot exec insert query: %v", err)
+  }
+  return nil
 }

@@ -69,10 +69,10 @@ func (f *Fetcher) ContinuouslyFetch() {
   log.Fatalf("fetching failed and stopped")
 }
 
-func (f *Fetcher) SetTicker(tickerName string) {
+func (f *Fetcher) SetTicker(ticker string) {
   panic("implement me")
 }
 
-func (f *Fetcher) QueryFetchedStocks(tickerName string) ([]*domain.Stock, error) {
+func (f *Fetcher) QueryFetchedStocks(ticker string) ([]*domain.Stock, error) {
   panic("implement me")
 }

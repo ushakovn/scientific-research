@@ -1,9 +1,9 @@
 package handler
 
 import (
+  "fmt"
   "net/http"
   "scientific-research/internal/fetcher"
-  "scientific-research/pkg/utils/csv"
 
   log "github.com/sirupsen/logrus"
 )
@@ -24,38 +24,43 @@ func (h *Handler) SetHandles() {
 }
 
 func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
+  req := &GetRequest{}
 
-  query := r.URL.Query()
-  ticker := query.Get("ticker")
+  if err := readRequest(r, req); err != nil {
+    writeError(w, err, http.StatusBadRequest)
+    return
+  }
+  if err := req.Validate(); err != nil {
+    writeError(w, err, http.StatusBadRequest)
+    return
+  }
 
-  stocks, err := h.fetcher.QueryFetchedStocks(ticker)
+  stocks, err := h.fetcher.QueryFetchedStocks(req.Ticker)
   if err != nil {
-    http.Error(w, err.Error(), http.StatusInternalServerError)
+    writeError(w, err, http.StatusInternalServerError)
+    return
+  }
+  if len(stocks) == 0 {
+    writeError(w, fmt.Errorf("stocks not found. try later"), http.StatusNotFound)
     return
   }
 
-  csvBytes, err := csv.ToCsvBytes(stocks)
+  response := GetResponse{
+    Stocks: stocks,
+  }
+  resp, err := response.Marshal(req.Format)
   if err != nil {
-    http.Error(w, err.Error(), http.StatusInternalServerError)
+    writeError(w, err, http.StatusInternalServerError)
     return
   }
 
-  if len(csvBytes) == 0 {
-    http.Error(w, "stocks not found. try later", http.StatusNotFound)
-    return
-  }
-
-  w.Header().Add("Content-Type", "text/csv")
-  w.Header().Add("Content-Disposition", "attachment;filename=out.csv")
-  w.WriteHeader(http.StatusOK)
-
-  if _, err := w.Write(csvBytes); err != nil {
-    http.Error(w, err.Error(), http.StatusInternalServerError)
+  if err = writeResponse(w, resp, req.FormResponseHeaders()); err != nil {
+    writeError(w, err, http.StatusInternalServerError)
     return
   }
 }
 
-func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleHealth(w http.ResponseWriter, _ *http.Request) {
   w.WriteHeader(http.StatusOK)
   _, err := w.Write([]byte("/ok"))
   if err != nil {

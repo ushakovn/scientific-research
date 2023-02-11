@@ -1,11 +1,20 @@
-package csv
+package convert
 
 import (
   "bytes"
   "encoding/csv"
+  "encoding/json"
   "fmt"
   "reflect"
 )
+
+func ToJsonBytes[T any](s T) ([]byte, error) {
+  b, err := json.Marshal(s)
+  if err != nil {
+    return nil, fmt.Errorf("cannot marshal to json: %v", err)
+  }
+  return b, nil
+}
 
 func ToCsvBytes[T any](s []T) ([]byte, error) {
   var (

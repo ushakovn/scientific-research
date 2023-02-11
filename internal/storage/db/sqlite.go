@@ -15,7 +15,7 @@ const (
   dataSource = "DB"
 )
 
-type DB interface {
+type Client interface {
   Exec(query string, args ...any) error
   Query(query string, args ...any) (*sql.Rows, error)
   QueryRow(query string, args ...any) *sql.Row
@@ -23,11 +23,15 @@ type DB interface {
   Close() error
 }
 
-type Client struct {
+type sqlite struct {
   db *sql.DB
 }
 
-func (c *Client) Open() error {
+func NewSqliteClient() Client {
+  return &sqlite{}
+}
+
+func (c *sqlite) Open() error {
   var (
     db  *sql.DB
     ds  string
@@ -51,7 +55,7 @@ func (c *Client) Open() error {
   return db.Ping()
 }
 
-func (c *Client) Close() error {
+func (c *sqlite) Close() error {
   err := retries.DoWithRetry(func() error {
     return c.db.Close()
   })
@@ -61,7 +65,7 @@ func (c *Client) Close() error {
   return nil
 }
 
-func (c *Client) Query(query string, args ...any) (*sql.Rows, error) {
+func (c *sqlite) Query(query string, args ...any) (*sql.Rows, error) {
   s, err := c.db.Prepare(query)
   if err != nil {
     return nil, err
@@ -69,7 +73,7 @@ func (c *Client) Query(query string, args ...any) (*sql.Rows, error) {
   return s.Query(args...)
 }
 
-func (c *Client) QueryRow(query string, args ...any) *sql.Row {
+func (c *sqlite) QueryRow(query string, args ...any) *sql.Row {
   s, err := c.db.Prepare(query)
   if err != nil {
     log.Fatal(err)
@@ -77,7 +81,7 @@ func (c *Client) QueryRow(query string, args ...any) *sql.Row {
   return s.QueryRow(args...)
 }
 
-func (c *Client) Exec(query string, args ...any) error {
+func (c *sqlite) Exec(query string, args ...any) error {
   s, err := c.db.Prepare(query)
   if err != nil {
     return err
