@@ -1,7 +1,6 @@
 package tinkoff // Package tinkoff: unused
 
 import (
-  "scientific-research/internal/domain"
   "sync/atomic"
   "time"
 
@@ -69,10 +68,10 @@ func (f *Fetcher) ContinuouslyFetch() {
   log.Fatalf("fetching failed and stopped")
 }
 
-func (f *Fetcher) SetTicker(ticker string) {
+func (f *Fetcher) SetTickerId(tickerId string) {
   panic("implement me")
 }
 
-func (f *Fetcher) QueryFetchedStocks(ticker string) ([]*domain.Stock, error) {
+func (f *Fetcher) SaveFetcherState() {
   panic("implement me")
 }

@@ -17,7 +17,7 @@ func NewCache[T any]() *Cache[T] {
   }
 }
 
-func (c *Cache[T]) GetCount() int {
+func (c *Cache[T]) Size() int {
   return int(c.counter.Load())
 }
 

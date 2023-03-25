@@ -8,6 +8,7 @@ type tickerResult struct {
   Market         string    `json:"market"`
   Locale         string    `json:"locale"`
   Type           string    `json:"type"`
+  Cik            string    `json:"cik"`
   Active         bool      `json:"active"`
   CurrencyName   string    `json:"currency_name"`
   LastUpdatedUtc time.Time `json:"last_updated_utc"`
@@ -37,4 +38,42 @@ type stocksResponse struct {
   ResultsCount int            `json:"resultsCount"`
   Status       string         `json:"status"`
   Ticker       string         `json:"ticker"`
+}
+
+type tickerDetailsResults struct {
+  Active          bool                   `json:"active"`
+  Address         *tickerDetailsAddress  `json:"address"`
+  Branding        *tickerDetailsBranding `json:"branding"`
+  Cik             string                 `json:"cik"`
+  CurrencyName    string                 `json:"currency_name"`
+  Description     string                 `json:"description"`
+  HomepageUrl     string                 `json:"homepage_url"`
+  ListDate        string                 `json:"list_date"`
+  Locale          string                 `json:"locale"`
+  Market          string                 `json:"market"`
+  Name            string                 `json:"name"`
+  PhoneNumber     string                 `json:"phone_number"`
+  PrimaryExchange string                 `json:"primary_exchange"`
+  SicCode         string                 `json:"sic_code"`
+  SicDescription  string                 `json:"sic_description"`
+  Ticker          string                 `json:"ticker"`
+  TickerRoot      string                 `json:"ticker_root"`
+  TotalEmployees  int                    `json:"total_employees"`
+}
+
+type tickerDetailsAddress struct {
+  Address1   string `json:"address1"`
+  City       string `json:"city"`
+  PostalCode string `json:"postal_code"`
+  State      string `json:"state"`
+}
+
+type tickerDetailsBranding struct {
+  IconUrl string `json:"icon_url"`
+  LogoUrl string `json:"logo_url"`
+}
+
+type tickerDetailsResponse struct {
+  Results *tickerDetailsResults `json:"results"`
+  Status  string                `json:"status"`
 }

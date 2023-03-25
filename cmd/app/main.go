@@ -2,10 +2,12 @@ package main
 
 import (
   "context"
+  "flag"
+  "net/http"
   "os"
   "os/signal"
   "scientific-research/internal/fetcher/fetchers/polygon"
-  "scientific-research/internal/handler"
+  "scientific-research/pkg/utils/httputils"
   "syscall"
 
   log "github.com/sirupsen/logrus"
@@ -14,32 +16,35 @@ import (
 func main() {
   ctx := context.Background()
 
-  f, err := polygon.NewFetcher(ctx)
-  if err != nil {
-    log.Fatal(err)
+  servePort := flag.String("port", "8080", "serving port")
+  configPath := flag.String("path", "", "path to service config file")
+  tickerId := flag.String("ticker", "", "specified ticker id for fetching")
+  flag.Parse()
+
+  cfg := polygon.NewConfig()
+  if err := cfg.Parse(*configPath); err != nil {
+    log.Fatalf("cannot parse fetcher config: %v", err)
   }
 
-  go f.ContinuouslyFetch()
+  fetcher, err := polygon.NewFetcher(ctx, cfg)
+  if err != nil {
+    log.Fatalf("cannot create new fetcher: %v", err)
+  }
+  if *tickerId != "" {
+    fetcher.SetTickerId(*tickerId)
+  }
 
-  h := handler.NewHandler(f)
-  h.SetHandles()
+  http.Handle("/health", httputils.HandleHealth())
+  go httputils.ContinuouslyServe(*servePort)
 
-  port := GetPort()
-  go h.ContinuouslyServe(port)
+  go fetcher.ContinuouslyFetch()
+  defer fetcher.SaveFetcherState()
 
-  GracefulShutdown()
+  serviceShutdown()
 }
 
-func GracefulShutdown() {
+func serviceShutdown() {
   exitSignal := make(chan os.Signal)
   signal.Notify(exitSignal, syscall.SIGINT, syscall.SIGTERM)
   <-exitSignal
-}
-
-func GetPort() string {
-  port := os.Getenv("PORT")
-  if port == "" {
-    return "8080"
-  }
-  return port
 }

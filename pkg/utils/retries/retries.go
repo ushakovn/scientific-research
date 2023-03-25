@@ -1,7 +1,7 @@
 package retries
 
 import (
-  "scientific-research/pkg/utils/slice"
+  "scientific-research/pkg/utils/common"
   "time"
 
   log "github.com/sirupsen/logrus"
@@ -40,7 +40,7 @@ func (o *Option) TrySet(option *Option) {
 }
 
 func DoWithRetry(h HandlerFuncE, options ...*Option) error {
-  option := slice.ExtractOptional(options...)
+  option := common.ExtractOptional(options...)
 
   retryOption := NewDefaultOption()
   retryOption.TrySet(option)
@@ -59,10 +59,4 @@ func DoWithRetry(h HandlerFuncE, options ...*Option) error {
   }
 
   return err
-}
-
-func DoWithRepeat(repeatCount int, h HandlerFunc) {
-  for runIdx := 1; runIdx <= repeatCount; runIdx++ {
-    h()
-  }
 }

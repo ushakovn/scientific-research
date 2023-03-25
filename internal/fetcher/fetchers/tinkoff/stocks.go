@@ -20,7 +20,7 @@ type Fetcher struct {
 }
 
 func NewFetcher(ctx context.Context) *Fetcher {
-  client := httpclient.NewClient(ctx)
+  client := httpclient.NewClient()
   return &Fetcher{
     ctx:        ctx,
     client:     client,

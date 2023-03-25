@@ -3,11 +3,12 @@ package httpclient
 import (
   "bytes"
   "context"
+  "encoding/json"
   "fmt"
   "io"
   "net/http"
+  "scientific-research/pkg/utils/common"
   "scientific-research/pkg/utils/retries"
-  "scientific-research/pkg/utils/slice"
   "strings"
   "time"
 
@@ -128,7 +129,7 @@ func (c *Client) getOnce(requestURL string, headers []Header) (*http.Response, e
 }
 
 func (c *Client) doRequest(req *http.Request, headers []Header) (*http.Response, error) {
-  req.Header = slice.ExtractOptional(headers...).ToHttpHeaders()
+  req.Header = common.ExtractOptional(headers...).ToHttpHeaders()
 
   resp, err := c.client.Do(req)
   if err != nil {
@@ -159,19 +160,14 @@ func readResponse(requestURL string, resp *http.Response) ([]byte, error) {
 
 func preparePostPayload(requestURL string, payload any) (io.Reader, error) {
   var reader io.Reader
-
   switch t := payload.(type) {
-
   case string:
     reader = strings.NewReader(payload.(string))
-
   case []byte:
     reader = bytes.NewBuffer(payload.([]byte))
-
   default:
     return nil, NewError(requestURL, fmt.Errorf("unsupported payload type: %T", t))
   }
-
   return reader, nil
 }
 
@@ -218,6 +214,10 @@ func (c *Client) postOnce(requestURL string, payload any, headers []Header) (*ht
   }
 
   return resp, err
+}
+
+func (c *Client) ParseResponse(bytes []byte, resp any) error {
+  return json.Unmarshal(bytes, resp)
 }
 
 func (l *rateLimiter) Wait(ctx context.Context) error {

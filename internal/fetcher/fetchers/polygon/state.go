@@ -2,128 +2,165 @@ package polygon
 
 import (
   "fmt"
-  "os"
   "scientific-research/internal/domain"
-  "strconv"
-  "sync/atomic"
+  "scientific-research/pkg/utils/common"
+  "scientific-research/pkg/utils/timeutils"
   "time"
 
   log "github.com/sirupsen/logrus"
 )
 
 type state struct {
-  lastUpd          time.Time
-  lastCount        atomic.Uint32
-  lastModeCode     int
+  finished         bool
+  updatedAt        *time.Time
+  modeCode         int
   modeTotalHours   int
   modeCurrentHours int
+  ticker           *stateReq
+  tickerDetails    *stateReq
+  stocks           *stateReq
 }
 
-func initState() (*state, error) {
-  modeTotalHours, err := strconv.Atoi(os.Getenv(modeTotalHoursEnv))
-  if err != nil {
-    return nil, fmt.Errorf("cannot convert hours for total mode: %v", err)
-  }
+type stateReq struct {
+  reqURL string
+  used   bool
+}
 
-  modeCurrentHours, err := strconv.Atoi(os.Getenv(modeCurrentHoursEnv))
-  if err != nil {
-    return nil, fmt.Errorf("cannot convert hours for current mode: %v", err)
-  }
-
+func newFetcherState(modeTotalHours, modeCurrentHours int) *state {
   return &state{
-    lastModeCode:     fetcherModeTotal,
+    modeCode:         fetcherModeTotal,
     modeTotalHours:   modeTotalHours,
     modeCurrentHours: modeCurrentHours,
-  }, nil
+    ticker:           &stateReq{},
+    tickerDetails:    &stateReq{},
+    stocks:           &stateReq{},
+  }
 }
 
-func (f *Fetcher) setModeCode(mode int) {
+func (s *state) SetFinished() {
+  s.finished = true
+}
+
+func (s *state) ResetFinished() {
+  s.finished = false
+}
+
+func (s *state) SetUpdatedTime(t time.Time) {
+  s.updatedAt = &t
+}
+
+func (s *state) SetModeCode(mode int) {
   if mode != fetcherModeTotal && mode != fetcherModeCurrent {
-    log.Warnf("invalid fetcher mode code: %d. mode do not changed", mode)
+    log.Warnf("invalid fetcher mode code: %d. mode code do not set. possible: %d - total, %d - current",
+      mode, fetcherModeTotal, fetcherModeCurrent)
     return
   }
-  f.state.lastModeCode = mode
-  log.Printf("set fetcher mode: %d. possible: %d - total, %d - current",
-    mode, fetcherModeTotal, fetcherModeCurrent)
+  s.modeCode = mode
+  log.Infof("current fetcher mode: %d", mode)
 }
 
-func (f *Fetcher) SetTicker(tickerName string) {
-  if tickerName == "" {
-    log.Warnf("empty ticker name. ticker do not set")
+func (f *Fetcher) SetTickerId(tickerId string) {
+  if tickerId == "" {
+    log.Warnf("ticker id is empty. ticker id do not set")
     return
   }
-  f.ticker = &domain.Ticker{
-    Ticker: tickerName,
+  f.specTickerId = tickerId
+}
+
+func (f *Fetcher) hasRecentlyFetched() bool {
+  if !f.state.finished || f.state.updatedAt == nil {
+    return false
   }
+  updatedAt := *f.state.updatedAt
+  thresholdTime := updatedAt.Add(recentlyThresholdInterval)
+  return thresholdTime.After(time.Now())
 }
 
-func (f *Fetcher) countInc(count int) {
-  fetched := uint32(count)
-  f.state.lastCount.Add(fetched)
-  f.state.lastUpd = time.Now()
-}
-
-func (f *Fetcher) countReset() {
-  f.state.lastCount.Store(0)
-  f.state.lastUpd = time.Now()
-}
-
-func (f *Fetcher) hasRelevantState() bool {
-  thresholdTime := f.state.lastUpd.Add(relevantThresholdInterval)
-  return f.state.lastCount.Load() != 0 && thresholdTime.After(time.Now())
-}
-
-func (f *Fetcher) hasSpeciallyTicker() bool {
-  return f.ticker != nil
+func (f *Fetcher) hasSpecTickerId() bool {
+  return f.specTickerId != ""
 }
 
 func (f *Fetcher) ContinuouslyFetch() {
-  f.setModeCode(fetcherModeTotal)
+  if err := f.loadFetcherState(); err != nil {
+    log.Errorf("state loading from storage failed. : %v", err)
+  }
+  f.state.SetModeCode(fetcherModeTotal)
 
   tryLeft := fetcherRetryCount
-
+  // fetch with retries
   for tryLeft >= 0 {
-    if f.hasRelevantState() {
-
+    if f.hasRecentlyFetched() {
       log.Printf("recently fetched. wait %v before the next fetch",
         recentlyFetchedSleepInterval)
 
       time.Sleep(recentlyFetchedSleepInterval)
+      f.state.ResetFinished() // reset finished field
       continue
     }
-
     var err error
 
-    if f.hasSpeciallyTicker() {
-      err = f.fetchStocks(f.ticker)
-
+    if f.hasSpecTickerId() {
+      err = f.fetchStocks(f.specTickerId)
     } else {
-      err = f.fetchTickers(f.fetchStocks)
+      err = f.fetchTickers()
     }
-
     if err != nil {
       log.Errorf("fetching error: %v. wait %v before the next fetch",
         err, encounteredErrorSleepInterval)
 
       time.Sleep(encounteredErrorSleepInterval)
-
       tryLeft--
       continue
     }
+    f.state.SetUpdatedTime(timeutils.NotTimeUTC())
+    f.state.SetFinished() // set finished field
 
+    // set retry count again
+    tryLeft = fetcherRetryCount
     log.Println("successfully fetching finished")
-    if f.hasSpeciallyTicker() {
+
+    if f.hasSpecTickerId() {
       return
     }
-
     f.once.Do(func() {
-      f.setModeCode(fetcherModeCurrent)
+      f.state.SetModeCode(fetcherModeCurrent)
     })
   }
-
   log.Fatalf("fetching failed and stopped")
 }
 
-func (f *Fetcher) QueryFetchedStocks(ticker string) ([]*domain.Stock, error) {
-  return f.storage.QueryStocks(ticker)
+func (f *Fetcher) SaveFetcherState() {
+  if err := f.storage.PutFetcherState(createFetcherState(f.state)); err != nil {
+    log.Fatalf("cannot put fetcher state to storage: %v", err)
+  }
+}
+
+func (f *Fetcher) loadFetcherState() error {
+  state, found, err := f.storage.GetFetcherState()
+  if err != nil {
+    return fmt.Errorf("cannot get fetcher state from storage: %v", err)
+  }
+  if !found { // if state not found not fields
+    return nil
+  }
+  // set fields from storage state
+  f.state.ticker.reqURL = common.StripString(state.TickerReqUrl)
+  f.state.tickerDetails.reqURL = common.StripString(state.TickerDetailsReqUrl)
+  f.state.stocks.reqURL = common.StripString(state.StockReqUrl)
+  f.state.updatedAt = &state.CreatedAt
+  f.state.finished = state.Finished
+
+  return nil
+}
+
+func createFetcherState(state *state) *domain.FetcherState {
+  if state == nil {
+    return nil
+  }
+  return &domain.FetcherState{
+    TickerReqUrl:        state.ticker.reqURL,
+    TickerDetailsReqUrl: state.tickerDetails.reqURL,
+    StockReqUrl:         state.stocks.reqURL,
+    CreatedAt:           timeutils.NotTimeUTC(),
+  }
 }

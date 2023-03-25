@@ -7,17 +7,13 @@ import "time"
 const (
   fetcherModeTotal   = 0
   fetcherModeCurrent = 1
-)
-
-const (
-  fetcherRetryCount  = 5
-  fetcherChanBufSize = 25
+  fetcherRetryCount  = 10
 )
 
 const (
   recentlyFetchedSleepInterval  = 1 * time.Hour
   encounteredErrorSleepInterval = 10 * time.Minute
-  relevantThresholdInterval     = 24 * time.Hour
+  recentlyThresholdInterval     = 24 * time.Hour
 )
 
 // Polygon API constants
@@ -35,13 +31,12 @@ const (
 )
 
 const (
-  basePrefixAPI = "https://api.polygon.io"
-  tickersAPI    = "/v3/reference/tickers"
-  stocksAPI     = "/v2/aggs/ticker/%s/range/%d/%s/%s/%s"
+  basePrefixAPI    = "https://api.polygon.io"
+  tickersAPI       = "/v3/reference/tickers"
+  stocksAPI        = "/v2/aggs/ticker/%s/range/%d/%s/%s/%s"
+  tickerDetailsAPI = "/v3/reference/tickers/%s"
 )
 
 const (
-  polygonTokenEnvName = "POLYGON_TOKEN"
-  modeTotalHoursEnv   = "MODE_TOTAL_HOURS"
-  modeCurrentHoursEnv = "MODE_CUR_HOURS"
+  defaultStringValue = "N/A"
 )
