@@ -65,7 +65,7 @@ func (s *storage) PutTicker(ticker *domain.Ticker) error {
     return err
   }
   log.Infof("put %d tickers in database. flush current cached",
-    stocksBatchSize)
+    tickerBatchSize)
 
   s.tickersCache.Flush()
   return nil
@@ -105,7 +105,7 @@ func (s *storage) PutTickerDetails(tickerDetails *domain.TickerDetails) error {
     return err
   }
   log.Infof("put %d tickers details in database. flush current cached",
-    stocksBatchSize)
+    tickerBatchSize)
 
   s.stocksCache.Flush()
   return nil
