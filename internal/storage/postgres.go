@@ -5,16 +5,14 @@ import (
   "fmt"
   "scientific-research/internal/domain"
   "scientific-research/internal/storage/postgres"
+  "sync/atomic"
 
   sq "github.com/Masterminds/squirrel"
   "github.com/jackc/pgx/v4"
   log "github.com/sirupsen/logrus"
 )
 
-const (
-  tickerBatchSize = 5  // batch size for ticker and ticker details caches
-  stocksBatchSize = 25 // batch size for stocks cache
-)
+const counterInc = 1
 
 type queryBuilder interface {
   ToSql() (string, []any, error)
@@ -29,11 +27,15 @@ type Storage interface {
 }
 
 type storage struct {
-  ctx                context.Context
-  client             postgres.Client
-  tickersCache       *Cache[*domain.Ticker]
-  tickerDetailsCache *Cache[*domain.TickerDetails]
-  stocksCache        *Cache[*domain.Stock]
+  ctx      context.Context
+  client   postgres.Client
+  counters *storageCounters
+}
+
+type storageCounters struct {
+  stock         atomic.Uint64
+  ticker        atomic.Uint64
+  tickerDetails atomic.Uint64
 }
 
 func NewStorage(ctx context.Context, config *postgres.Config) (Storage, error) {
@@ -42,78 +44,62 @@ func NewStorage(ctx context.Context, config *postgres.Config) (Storage, error) {
     return nil, fmt.Errorf("cannot create new postgres client: %v", err)
   }
   return &storage{
-    ctx:                ctx,
-    client:             client,
-    tickersCache:       NewCache[*domain.Ticker](),
-    tickerDetailsCache: NewCache[*domain.TickerDetails](),
-    stocksCache:        NewCache[*domain.Stock](),
+    ctx:      ctx,
+    client:   client,
+    counters: newStorageCounters(),
   }, nil
 }
 
-func (s *storage) PutTicker(ticker *domain.Ticker) error {
-  cacheSize := s.tickersCache.Size()
-
-  if cacheSize < tickerBatchSize {
-    s.tickersCache.Put(ticker)
-    log.Infof("put ticker '%s' for company '%s' in cache. current cache size: %d",
-      ticker.TickerId, ticker.CompanyName, cacheSize)
-    return nil
+func newStorageCounters() *storageCounters {
+  return &storageCounters{
+    stock:         atomic.Uint64{},
+    ticker:        atomic.Uint64{},
+    tickerDetails: atomic.Uint64{},
   }
-  tickers := s.tickersCache.Get()
-
-  if err := s.putBatchTickers(tickers); err != nil {
-    return err
-  }
-  log.Infof("put %d tickers in database. flush current cached",
-    tickerBatchSize)
-
-  s.tickersCache.Flush()
-  return nil
 }
 
-func (s *storage) PutStock(stock *domain.Stock) error {
-  cacheSize := s.stocksCache.Size()
-
-  if cacheSize < stocksBatchSize {
-    s.stocksCache.Put(stock)
-    log.Infof("put stock for ticker '%s' in cache. current cache size: %d",
-      stock.TickerId, cacheSize+1)
-    return nil
+func (s *storage) PutTicker(ticker *domain.Ticker) error {
+  if ticker == nil {
+    return fmt.Errorf("ticker is a nil")
   }
-  tickers := s.stocksCache.Get()
-  if err := s.putBatchStocks(tickers); err != nil {
+  builder := sq.Insert(`ticker`).
+    Columns(
+      `ticker_id`,
+      `company_name`,
+      `company_locale`,
+      `currency_name`,
+      `ticker_cik`,
+      `active`,
+      `created_at`,
+      `external_updated_at`,
+    ).
+    Values(
+      ticker.TickerId,
+      ticker.CompanyName,
+      ticker.CompanyLocale,
+      ticker.CurrencyName,
+      ticker.TickerCik,
+      ticker.Active,
+      ticker.CreatedAt,
+      ticker.ExternalUpdatedAt,
+    ).
+    Suffix(`ON CONFLICT (ticker_id) DO NOTHING`).
+    PlaceholderFormat(sq.Dollar)
+
+  if err := s.doPutQuery(builder); err != nil {
     return err
   }
-  log.Infof("put %d stocks in database. flush current cached",
-    stocksBatchSize)
+  s.counters.ticker.Add(counterInc)
 
-  s.stocksCache.Flush()
+  log.Infof("put ticker '%s' for company '%s' in database. total: %d",
+    ticker.TickerId, ticker.CompanyName, s.counters.ticker.Load())
+
   return nil
 }
 
 func (s *storage) PutTickerDetails(tickerDetails *domain.TickerDetails) error {
-  cacheSize := s.tickerDetailsCache.Size()
-
-  if cacheSize < tickerBatchSize {
-    s.tickerDetailsCache.Put(tickerDetails)
-    log.Infof("put ticker details for ticker '%s' in cache. current cache size: %d",
-      tickerDetails.TickerId, cacheSize+1)
-    return nil
-  }
-  tickersDetails := s.tickerDetailsCache.Get()
-  if err := s.putBatchTickerDetails(tickersDetails); err != nil {
-    return err
-  }
-  log.Infof("put %d tickers details in database. flush current cached",
-    tickerBatchSize)
-
-  s.stocksCache.Flush()
-  return nil
-}
-
-func (s *storage) putBatchTickerDetails(tickersDetails []*domain.TickerDetails) error {
-  if len(tickersDetails) == 0 {
-    return fmt.Errorf("tickers details batch is empty")
+  if tickerDetails == nil {
+    return fmt.Errorf("ticker details is a nil")
   }
   builder := sq.Insert(`ticker_details`).
     Columns(
@@ -126,64 +112,35 @@ func (s *storage) putBatchTickerDetails(tickersDetails []*domain.TickerDetails) 
       `company_city`,
       `company_address`,
       `company_postal_code`,
-    )
-  for _, details := range tickersDetails {
-    builder = builder.Values(
-      details.TickerId,
-      details.CompanyDescription,
-      details.HomepageUrl,
-      details.PhoneNumber,
-      details.TotalEmployees,
-      details.CompanyState,
-      details.CompanyCity,
-      details.CompanyAddress,
-      details.CompanyPostalCode,
-    )
-  }
-  builder = builder.
+    ).
+    Values(
+      tickerDetails.TickerId,
+      tickerDetails.CompanyDescription,
+      tickerDetails.HomepageUrl,
+      tickerDetails.PhoneNumber,
+      tickerDetails.TotalEmployees,
+      tickerDetails.CompanyState,
+      tickerDetails.CompanyCity,
+      tickerDetails.CompanyAddress,
+      tickerDetails.CompanyPostalCode,
+    ).
     Suffix(`ON CONFLICT (ticker_id) DO NOTHING`).
     PlaceholderFormat(sq.Dollar)
 
-  return s.doPutQuery(builder)
+  if err := s.doPutQuery(builder); err != nil {
+    return err
+  }
+  s.counters.tickerDetails.Add(counterInc)
+
+  log.Infof("put ticker details for ticker '%s' in database. total: %d",
+    tickerDetails.TickerId, s.counters.tickerDetails.Load())
+
+  return nil
 }
 
-func (s *storage) putBatchTickers(tickers []*domain.Ticker) error {
-  if len(tickers) == 0 {
-    return fmt.Errorf("tickers batch is empty")
-  }
-  builder := sq.Insert(`ticker`).
-    Columns(
-      `ticker_id`,
-      `company_name`,
-      `company_locale`,
-      `currency_name`,
-      `ticker_cik`,
-      `active`,
-      `created_at`,
-      `external_updated_at`,
-    )
-  for _, ticker := range tickers {
-    builder = builder.Values(
-      ticker.TickerId,
-      ticker.CompanyName,
-      ticker.CompanyLocale,
-      ticker.CurrencyName,
-      ticker.TickerCik,
-      ticker.Active,
-      ticker.CreatedAt,
-      ticker.ExternalUpdatedAt,
-    )
-  }
-  builder = builder.
-    Suffix(`ON CONFLICT (ticker_id) DO NOTHING`).
-    PlaceholderFormat(sq.Dollar)
-
-  return s.doPutQuery(builder)
-}
-
-func (s *storage) putBatchStocks(stocks []*domain.Stock) error {
-  if len(stocks) == 0 {
-    return fmt.Errorf("stocks batch is empty")
+func (s *storage) PutStock(stock *domain.Stock) error {
+  if stock == nil {
+    return fmt.Errorf("stock is a nil")
   }
   builder := sq.Insert(`stock`).
     Columns(
@@ -196,9 +153,8 @@ func (s *storage) putBatchStocks(stocks []*domain.Stock) error {
       `trading_volume`,
       `stocked_at`,
       `created_at`,
-    )
-  for _, stock := range stocks {
-    builder = builder.Values(
+    ).
+    Values(
       stock.StockId,
       stock.TickerId,
       stock.OpenPrice,
@@ -208,13 +164,19 @@ func (s *storage) putBatchStocks(stocks []*domain.Stock) error {
       stock.TradingVolume,
       stock.StockedAt,
       stock.CreatedAt,
-    )
-  }
-  builder = builder.
+    ).
     Suffix(`ON CONFLICT (stock_id) DO NOTHING`).
     PlaceholderFormat(sq.Dollar)
 
-  return s.doPutQuery(builder)
+  if err := s.doPutQuery(builder); err != nil {
+    return err
+  }
+  s.counters.stock.Add(counterInc)
+
+  log.Infof("put stock '%s' for ticker '%s' in database. total: %d",
+    stock.StockId, stock.TickerId, s.counters.stock.Load())
+
+  return nil
 }
 
 func (s *storage) doPutQuery(builder queryBuilder) error {
@@ -236,7 +198,7 @@ func mustBuildQuery(builder queryBuilder) (string, []any) {
 func (s *storage) PutFetcherState(state *domain.FetcherState) error {
   builder := sq.Insert(`fetcher_state`).
     Columns(
-      // fetcher_state_id is serial type, autoincrement
+      // `fetcher_state_id` is serial type, autoincrement
       `ticker_req_url`,
       `ticker_details_req_url`,
       `stock_req_url`,
@@ -291,7 +253,9 @@ func (s *storage) GetFetcherState() (*domain.FetcherState, bool, error) {
   if !found {
     return nil, false, nil
   }
-  log.Infof("sucessfully get fetcher state from database")
+  log.Infof("sucessfully get fetcher state at '%s' from database",
+    state.CreatedAt)
+
   return state, true, nil
 }
 

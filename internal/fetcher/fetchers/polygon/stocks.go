@@ -7,6 +7,7 @@ import (
   "scientific-research/internal/domain"
   "scientific-research/internal/fetcher"
   "scientific-research/internal/httpclient"
+  "scientific-research/internal/queue"
   "scientific-research/internal/storage"
   "scientific-research/pkg/utils/common"
   "scientific-research/pkg/utils/timeutils"
@@ -21,7 +22,7 @@ type Fetcher struct {
   ctx          context.Context
   client       *httpclient.Client
   storage      storage.Storage
-  token        string
+  msQueue      queue.MediaServiceQueue
   state        *state
   once         *sync.Once
   specTickerId string
@@ -30,23 +31,37 @@ type Fetcher struct {
 func NewFetcher(ctx context.Context, config *Config) (fetcher.Fetcher, error) {
   client := httpclient.NewClient(
     httpclient.WithContext(ctx),
+    httpclient.WithApiToken(
+      apiTokenKey,
+      config.ApiToken,
+    ),
     httpclient.WithRequestsLimit(
       polygonReqsLimit,
       polygonReqPerDur,
       polygonWaitDur,
       polygonDeadlineDur,
-    ),
+    ))
+
+  fetcherState := newFetcherState(
+    config.ModeTotalHours,
+    config.ModeCurrentHours,
   )
+
   fetcherStorage, err := storage.NewStorage(ctx, config.StorageConfig)
   if err != nil {
     return nil, err
   }
+  msQueue, err := queue.NewMediaServiceQueue(ctx, config.QueueConfig)
+  if err != nil {
+    return nil, err
+  }
+
   return &Fetcher{
     ctx:     ctx,
     client:  client,
     storage: fetcherStorage,
-    token:   config.AccessToken,
-    state:   newFetcherState(config.ModeTotalHours, config.ModeCurrentHours),
+    msQueue: msQueue,
+    state:   fetcherState,
     once:    &sync.Once{},
   }, nil
 }
@@ -54,7 +69,7 @@ func NewFetcher(ctx context.Context, config *Config) (fetcher.Fetcher, error) {
 func (f *Fetcher) getTickersResponse(query string) (*tickersResponse, error) {
   reqURL := getReqUrlFromStateOrNew(f.state.ticker,
     func() string {
-      return fmt.Sprint(basePrefixAPI, tickersAPI, "?", query)
+      return fmt.Sprint(basePrefixApi, tickersApi, "?", query)
     })
 
   resp, err := f.client.Get(reqURL)
@@ -69,8 +84,8 @@ func (f *Fetcher) getTickersResponse(query string) (*tickersResponse, error) {
   return tickersResp, nil
 }
 
-func buildTickersQuery(token string) url.Values {
-  query := newQueryToAPI(token)
+func buildTickersQuery() url.Values {
+  query := url.Values{}
   query.Add("active", "true")
   query.Add("order", "asc")
   return query
@@ -87,18 +102,23 @@ func (f *Fetcher) fetchTickerDetails(tickerId string) (*domain.TickerDetails, er
   if resp.Results == nil {
     return nil, fmt.Errorf("ticker details results not found")
   }
+
+  if err = f.sendMessagesToPutTickerBranding(tickerId, resp.Results.Branding); err != nil {
+    log.Errorf("cannot send messages to put branding for ticker '%s': %v", tickerId, err)
+  }
   details, err := createTickerDetails(resp.Results)
   if err != nil {
     return nil, fmt.Errorf("cannot create ticker details: %v", err)
   }
+
   return details, nil
 }
 
 func (f *Fetcher) getTickerDetailsResponse(tickerId string) (*tickerDetailsResponse, error) {
   reqURL := getReqUrlFromStateOrNew(f.state.tickerDetails,
     func() string {
-      tickerDetailsQuery := fmt.Sprintf(tickerDetailsAPI, tickerId)
-      return fmt.Sprint(basePrefixAPI, tickerDetailsQuery, "?", newQueryToAPI(f.token).Encode())
+      tickerDetailsQuery := fmt.Sprintf(tickerDetailsApi, tickerId)
+      return fmt.Sprint(basePrefixApi, tickerDetailsQuery)
     })
 
   resp, err := f.client.Get(reqURL)
@@ -114,7 +134,7 @@ func (f *Fetcher) getTickerDetailsResponse(tickerId string) (*tickerDetailsRespo
 }
 
 func (f *Fetcher) fetchTickers() error {
-  query := buildTickersQuery(f.token)
+  query := buildTickersQuery()
   queryStr := query.Encode()
 
   for {
@@ -187,26 +207,19 @@ func (f *Fetcher) getStockDateRange() (string, string) {
   return from, to
 }
 
-func buildStocksReqURL(tickerName, fromDate, toDate, tokenValue string) string {
+func buildStocksReqURL(tickerName, fromDate, toDate string) string {
   multiplier := 1
   timespan := "day"
-  rangeQuery := fmt.Sprintf(stocksAPI, tickerName, multiplier, timespan, fromDate, toDate)
-  reqURL := fmt.Sprint(basePrefixAPI, rangeQuery, "?", newQueryToAPI(tokenValue).Encode())
+  rangeQuery := fmt.Sprintf(stocksApi, tickerName, multiplier, timespan, fromDate, toDate)
+  reqURL := fmt.Sprint(basePrefixApi, rangeQuery)
   return reqURL
-}
-
-func newQueryToAPI(tokenValue string) url.Values {
-  const tokenQueryKey = "apiKey"
-  query := url.Values{}
-  query.Add(tokenQueryKey, tokenValue)
-  return query
 }
 
 func (f *Fetcher) fetchStocks(tickerId string) error {
   reqURL := getReqUrlFromStateOrNew(f.state.stocks,
     func() string {
       fromDate, toDate := f.getStockDateRange()
-      return buildStocksReqURL(tickerId, fromDate, toDate, f.token)
+      return buildStocksReqURL(tickerId, fromDate, toDate)
     })
 
   resp, err := f.client.Get(reqURL)

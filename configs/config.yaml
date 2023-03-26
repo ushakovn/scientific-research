@@ -1,0 +1,16 @@
+total_mode_hours: 8760
+current_mode_hours: 24
+api_token: fcIs0pT3mRYuSNHAeGA23PvBfOoSVYTB
+storage_config:
+  host: "localhost"
+  port: 5436
+  user: "postgres"
+  password: "scp"
+  db_name: "postgres"
+  ssl_mode: "disable"
+queue_config:
+  user: "rabbit"
+  password: "scp"
+  host: "localhost"
+  port: 5672
+  queue_key: media_service_queue

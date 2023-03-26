@@ -2,7 +2,7 @@ package polygon
 
 import "time"
 
-// Fetcher constants
+const fetcherName = "polygon_fetcher"
 
 const (
   fetcherModeTotal   = 0
@@ -15,8 +15,6 @@ const (
   encounteredErrorSleepInterval = 10 * time.Minute
   recentlyThresholdInterval     = 24 * time.Hour
 )
-
-// Polygon API constants
 
 const (
   polygonReqsLimit   = 5
@@ -31,12 +29,13 @@ const (
 )
 
 const (
-  basePrefixAPI    = "https://api.polygon.io"
-  tickersAPI       = "/v3/reference/tickers"
-  stocksAPI        = "/v2/aggs/ticker/%s/range/%d/%s/%s/%s"
-  tickerDetailsAPI = "/v3/reference/tickers/%s"
+  basePrefixApi = "https://api.polygon.io"
+
+  tickersApi       = "/v3/reference/tickers"
+  stocksApi        = "/v2/aggs/ticker/%s/range/%d/%s/%s/%s"
+  tickerDetailsApi = "/v3/reference/tickers/%s"
+
+  apiTokenKey = "apiKey"
 )
 
-const (
-  defaultStringValue = "N/A"
-)
+const defaultStringValue = "N/A"

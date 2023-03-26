@@ -7,6 +7,7 @@ import (
   "fmt"
   "io"
   "net/http"
+  "net/url"
   "scientific-research/pkg/utils/common"
   "scientific-research/pkg/utils/retries"
   "strings"
@@ -20,6 +21,12 @@ type Client struct {
   ctx     context.Context
   client  http.Client
   limiter *rateLimiter
+  token   *apiToken
+}
+
+type apiToken struct {
+  key   string
+  value string
 }
 
 type rateLimiter struct {
@@ -37,11 +44,9 @@ func NewClient(options ...Options) *Client {
     ctx:    context.Background(),
     client: http.Client{},
   }
-
   for _, opt := range options {
     opt(client)
   }
-
   return client
 }
 
@@ -51,6 +56,15 @@ func WithContext(ctx context.Context) Options {
       return
     }
     c.ctx = ctx
+  }
+}
+
+func WithApiToken(tokenKey, tokenValue string) Options {
+  return func(c *Client) {
+    c.token = &apiToken{
+      key:   tokenKey,
+      value: tokenValue,
+    }
   }
 }
 
@@ -75,7 +89,16 @@ func WithRequestsLimit(reqsCount int, perDur, waitDur, deadlineDur time.Duration
 
 type Header map[string]string
 
-func (h Header) ToHttpHeaders() http.Header {
+func (h Header) GetOrDefault(key string) string {
+  return h[key]
+}
+
+func (h Header) Get(key string) (string, bool) {
+  val, ok := h[key]
+  return val, ok
+}
+
+func (h Header) toHttpHeaders() http.Header {
   httpHeaders := http.Header{}
 
   for key, value := range h {
@@ -88,7 +111,26 @@ func (h Header) ToHttpHeaders() http.Header {
   return httpHeaders
 }
 
-func (c *Client) Get(requestURL string, headers ...Header) ([]byte, error) {
+func toHeaders(httpHeaders http.Header) Header {
+  headers := Header{}
+
+  for key, values := range httpHeaders {
+    if len(values) == 0 {
+      continue
+    }
+    headers[key] = values[0]
+  }
+
+  return headers
+}
+
+type FullResp struct {
+  Content []byte
+  Headers Header
+  Code    int
+}
+
+func (c *Client) GetFullResp(requestURL string, headers ...Header) (*FullResp, error) {
   var (
     resp *http.Response
     err  error
@@ -99,15 +141,31 @@ func (c *Client) Get(requestURL string, headers ...Header) ([]byte, error) {
     return err
   })
   if err != nil {
-    return nil, NewError(requestURL, fmt.Errorf("%s request failed: %v", http.MethodGet, err))
+    return nil, NewError(requestURL,
+      fmt.Errorf("%s request failed: %v", http.MethodGet, err),
+    )
   }
 
   content, err := readResponse(requestURL, resp)
   if err != nil {
     return nil, err
   }
+  respHeaders := toHeaders(resp.Header)
+  statusCode := resp.StatusCode
 
-  return content, nil
+  return &FullResp{
+    Content: content,
+    Headers: respHeaders,
+    Code:    statusCode,
+  }, nil
+}
+
+func (c *Client) Get(requestURL string, headers ...Header) ([]byte, error) {
+  fullResp, err := c.GetFullResp(requestURL, headers...)
+  if err != nil {
+    return nil, err
+  }
+  return fullResp.Content, nil
 }
 
 func (c *Client) getOnce(requestURL string, headers []Header) (*http.Response, error) {
@@ -115,11 +173,10 @@ func (c *Client) getOnce(requestURL string, headers []Header) (*http.Response, e
     return nil, fmt.Errorf("limiter wait failed: %v", err)
   }
 
-  req, err := http.NewRequestWithContext(c.ctx, http.MethodGet, requestURL, nil)
+  req, err := c.formRequest(requestURL, nil)
   if err != nil {
-    return nil, NewError(requestURL, fmt.Errorf("cannot create request: %v", err))
+    return nil, err
   }
-
   resp, err := c.doRequest(req, headers)
   if err != nil {
     return nil, err
@@ -128,20 +185,53 @@ func (c *Client) getOnce(requestURL string, headers []Header) (*http.Response, e
   return resp, nil
 }
 
+func (t *apiToken) addToRequestURL(reqURL string) (string, error) {
+  reqURL = strings.TrimSpace(reqURL)
+  // try parse url
+  parsedUrl, err := url.Parse(reqURL)
+  if err != nil {
+    return "", fmt.Errorf("malformed request url '%s': %v", reqURL, err)
+  }
+  // parse query
+  query := parsedUrl.Query()
+  // set token value
+  query.Set(t.key, t.value)
+  parsedUrl.RawQuery = query.Encode()
+
+  reqURL = parsedUrl.String()
+
+  return reqURL, nil
+}
+
+func (c *Client) formRequest(reqURL string, body io.Reader) (*http.Request, error) {
+  var (
+    err error
+  )
+  if c.token != nil {
+    reqURL, err = c.token.addToRequestURL(reqURL)
+    if err != nil {
+      return nil, fmt.Errorf("cannot add token to request url: %v", err)
+    }
+  }
+  req, err := http.NewRequestWithContext(c.ctx, http.MethodGet, reqURL, body)
+  if err != nil {
+    return nil, NewError(reqURL, fmt.Errorf("cannot create request: %v", err))
+  }
+  return req, nil
+}
+
 func (c *Client) doRequest(req *http.Request, headers []Header) (*http.Response, error) {
-  req.Header = common.ExtractOptional(headers...).ToHttpHeaders()
+  req.Header = common.ExtractOptional(headers...).toHttpHeaders()
 
   resp, err := c.client.Do(req)
   if err != nil {
     return nil, NewError(req.URL.String(), fmt.Errorf("do request failed: %v", err))
   }
-
   statusCode := resp.StatusCode
 
   if statusCode >= http.StatusBadRequest {
     return nil, NewError(req.URL.String(), fmt.Errorf("bad response. got status code: %d", statusCode))
   }
-
   return resp, nil
 }
 
@@ -198,16 +288,14 @@ func (c *Client) postOnce(requestURL string, payload any, headers []Header) (*ht
     return nil, fmt.Errorf("limiter wait failed: %v", err)
   }
 
-  reader, err := preparePostPayload(requestURL, payload)
+  body, err := preparePostPayload(requestURL, payload)
   if err != nil {
     return nil, NewError(requestURL, fmt.Errorf("cannot prepare post payload: %v", err))
   }
-
-  req, err := http.NewRequestWithContext(c.ctx, http.MethodPost, requestURL, reader)
+  req, err := c.formRequest(requestURL, body)
   if err != nil {
-    return nil, NewError(requestURL, fmt.Errorf("cannot create request: %v", err))
+    return nil, err
   }
-
   resp, err := c.doRequest(req, headers)
   if err != nil {
     return nil, err

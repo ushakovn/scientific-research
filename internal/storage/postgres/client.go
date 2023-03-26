@@ -29,8 +29,7 @@ func NewClient(ctx context.Context, config *Config) (Client, error) {
     ctx, cancel := context.WithTimeout(ctx, connTimeout)
     defer cancel()
 
-    pgxConn, err = pgxpool.Connect(ctx, strConn)
-    if err != nil {
+    if pgxConn, err = pgxpool.Connect(ctx, strConn); err != nil {
       return fmt.Errorf("cannot connect to posgtres pgx driver: %v", err)
     }
     return nil

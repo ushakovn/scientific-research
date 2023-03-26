@@ -1,6 +1,8 @@
 package common
 
-import "strings"
+import (
+  "strings"
+)
 
 func ExtractOptional[T any](optional ...T) T {
   var value T

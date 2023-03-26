@@ -25,3 +25,7 @@ func TimestampToTimeUTC(ts int64) time.Time {
   }
   return t
 }
+
+func NowTimestampUTC() int64 {
+  return time.Now().Unix()
+}

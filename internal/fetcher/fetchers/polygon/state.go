@@ -56,7 +56,8 @@ func (s *state) SetModeCode(mode int) {
     return
   }
   s.modeCode = mode
-  log.Infof("current fetcher mode: %d", mode)
+  log.Infof("current fetcher mode: %d. possible: %d - total, %d - current",
+    mode, fetcherModeTotal, fetcherModeCurrent)
 }
 
 func (f *Fetcher) SetTickerId(tickerId string) {
@@ -140,7 +141,7 @@ func (f *Fetcher) loadFetcherState() error {
   if err != nil {
     return fmt.Errorf("cannot get fetcher state from storage: %v", err)
   }
-  if !found { // if state not found not fields
+  if !found {
     return nil
   }
   // set fields from storage state
